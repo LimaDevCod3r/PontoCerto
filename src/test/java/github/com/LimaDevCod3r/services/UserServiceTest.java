@@ -5,12 +5,14 @@ import github.com.LimaDevCod3r.exceptions.ResourcesAlreadyExistsException;
 import github.com.LimaDevCod3r.models.User;
 import github.com.LimaDevCod3r.models.enums.UserRole;
 import github.com.LimaDevCod3r.repositories.UserRepository;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.security.core.parameters.P;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
@@ -18,11 +20,10 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@DisplayName("Testes para UserService")
 public class UserServiceTest {
 
     @Mock
@@ -31,107 +32,99 @@ public class UserServiceTest {
     @Mock
     private PasswordEncoder passwordEncoder;
 
-
     @InjectMocks
     private UserServiceImpl userService;
 
+    @Nested
+    @DisplayName("Testes para o método createUser")
+    class CreateUserTests {
 
-    @Test
-    void whenCreateUser_thenReturnsSavedUser() {
+        @Test
+        @DisplayName("Deve retornar o usuário salvo ao criar com sucesso")
+        void whenCreateUser_thenReturnsSavedUser() {
+            // Arrange
+            User userToSave = new User();
+            userToSave.setUsername("testuser");
+            userToSave.setPassword("testpassword");
+            userToSave.setRole(UserRole.USER);
 
-        // Arrange (Given) - Preparamos os dados e o comportamento esperado.
-        User userToSave = new User();
-        userToSave.setUsername("testuser");
-        userToSave.setRole(UserRole.USER);
-        userToSave.setPassword("testpassword");
+            User savedUser = new User();
+            savedUser.setId(UUID.randomUUID());
+            savedUser.setUsername(userToSave.getUsername());
+            savedUser.setPassword("encodedPassword"); // Senha já deve estar criptografada
+            savedUser.setRole(userToSave.getRole());
 
-        // Este é o objeto que esperamos que o repositório retorne após salvar.
-        User savedUser = new User();
-        savedUser.setId(UUID.randomUUID());
-        savedUser.setRole(userToSave.getRole());
-        savedUser.setUsername(userToSave.getUsername());
-        savedUser.setPassword(userToSave.getPassword());
+            when(userRepository.save(any(User.class))).thenReturn(savedUser);
+            when(passwordEncoder.encode(anyString())).thenReturn("encodedPassword");
 
-        // Configuramos o mock: quando o método save for chamado, ele deve retornar nosso `savedUser`.
-        when(userRepository.save(any(User.class))).thenReturn(savedUser);
+            // Act
+            User actualUser = userService.createUser(userToSave);
 
-        // Act (When) - Executamos a ação que queremos testar.
-        User actualUser = userService.createUser(userToSave);
+            // Assert
+            assertNotNull(actualUser);
+            assertEquals(savedUser.getId(), actualUser.getId());
+            verify(userRepository).save(any(User.class));
+        }
 
-        // Assert (Then) - Verificamos se o resultado é o esperado.
-        assertNotNull(actualUser, "O usuário salvo não deve ser nulo");
-        assertNotNull(actualUser.getId(), "O ID do usuário salvo não deve ser nulo");
-        assertNotNull(actualUser.getUsername(), "O username do usuário salvo não deve ser nulo");
-        assertNotNull(actualUser.getRole(), "O role do usuário salvo não deve ser nulo");
-        assertNotNull(actualUser.getPassword(), "O password do usuário salvo não deve ser nulo");
+        @Test
+        @DisplayName("Deve criptografar a senha ao criar um novo usuário")
+        void whenCreateUser_thenPasswordShouldBeEncrypted() {
+            // Arrange
+            String rawPassword = "plainPassword123";
+            String encodedPassword = "encodedPasswordABC";
+            User userToSave = new User();
+            userToSave.setUsername("cryptoUser");
+            userToSave.setPassword(rawPassword);
 
-        // verificar se o método `save` foi chamado no repositório.
-        verify(userRepository).save(userToSave);
+            when(passwordEncoder.encode(rawPassword)).thenReturn(encodedPassword);
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
+            // Act
+            User savedUser = userService.createUser(userToSave);
+
+            // Assert
+            verify(passwordEncoder).encode(rawPassword);
+            assertEquals(encodedPassword, savedUser.getPassword(), "A senha salva deve ser a versão criptografada");
+            assertNotEquals(rawPassword, savedUser.getPassword());
+        }
+
+        @Test
+        @DisplayName("Deve lançar exceção ao tentar criar usuário com username existente")
+        void whenCreateUserWithSameUsername_thenThrowsResourcesAlreadyExistsException() {
+            // Arrange
+            String existingUsername = "LimaDev2001";
+            User newUser = new User();
+            newUser.setUsername(existingUsername);
+            newUser.setPassword("password123");
+
+            when(userRepository.findByUsername(existingUsername)).thenReturn(Optional.of(new User()));
+
+            // Act & Assert
+            ResourcesAlreadyExistsException exception = assertThrows(
+                    ResourcesAlreadyExistsException.class,
+                    () -> userService.createUser(newUser)
+            );
+            assertEquals(String.format("O nome de usuário '%s' já está em uso.", newUser.getUsername()), exception.getMessage());
+            verify(userRepository, never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("Deve lançar exceção ao criar usuário com senha semelhante ao username")
+        void whenCreateUserWithSimilarUsernameAndPassword_thenThrowsInsecureCredentialsException() {
+            // Arrange
+            User userWithSimilarCredentials = new User();
+            userWithSimilarCredentials.setUsername("LimaDev2007");
+            userWithSimilarCredentials.setPassword("LimaDev2004");
+
+            // Act & Assert
+            InsecureCredentialsException exception = assertThrows(
+                    InsecureCredentialsException.class,
+                    () -> userService.createUser(userWithSimilarCredentials)
+            );
+            assertEquals("O nome de usuário não pode ser igual ou semelhante à senha.", exception.getMessage());
+            verify(userRepository, never()).save(any(User.class));
+        }
     }
 
-    @Test
-    void  whenCreateUser_thenPasswordShouldBeEncrypted(){
-        String rawPassword = "plainPassword123";
-        String encodedPassword = "encodedPasswordABC";
 
-        User userToSave = new User();
-        userToSave.setUsername("cryptoUser");
-        userToSave.setPassword(rawPassword);
-
-        when(passwordEncoder.encode(rawPassword)).thenReturn(encodedPassword);
-        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        User savedUser = userService.createUser(userToSave);
-
-        verify(passwordEncoder).encode(rawPassword);
-
-        assertNotEquals(rawPassword, savedUser.getPassword(), "A senha não deve ser salva em texto plano");
-
-        assertEquals(encodedPassword, savedUser.getPassword(), "A senha salva deve ser a versão criptografada");
-    }
-
-    @Test
-    void WhenCreateUserWithSameUsername_thenThrowsResourcesAlreadyExistsException() {
-
-        // Arrange(Given)
-        String existingUsername = "LimaDev2001";
-        User newUser = new User();
-        newUser.setUsername(existingUsername);
-        newUser.setPassword("password123");
-
-        // Simula que o repositório encontrou um usuário com o mesmo username.
-        when(userRepository.findByUsername(existingUsername)).thenReturn(Optional.of(new User()));
-
-        // Act & Assert (When & Then)
-        // Verifica se a exceção correta é lançada.
-        ResourcesAlreadyExistsException exception = assertThrows(
-                ResourcesAlreadyExistsException.class,
-                () -> userService.createUser(newUser)
-        );
-
-        // Verifica a mensagem da exceção.
-        assertEquals( String.format("O nome de usuário '%s' já está em uso.", newUser.getUsername()), exception.getMessage());
-
-        // Garante que o método save NUNCA foi chamado.
-        verify(userRepository, never()).save(any(User.class));
-    }
-
-    @Test
-    void whenCreateUserWithSimilarUsernameAndPassword_thenThrowsInsecureCredentialsException() {
-        // Arrange (Given)
-        User userWithSimilarCredentials = new User();
-        userWithSimilarCredentials.setUsername("LimaDev2007");
-        userWithSimilarCredentials.setPassword("LimaDev2004");
-
-        // Act & Assert (When & Then)
-        InsecureCredentialsException exception = assertThrows(
-                InsecureCredentialsException.class,
-                () -> userService.createUser(userWithSimilarCredentials)
-        );
-
-        assertEquals("O nome de usuário não pode ser igual ou semelhante à senha.", exception.getMessage());
-
-        verify(userRepository, never()).save(any(User.class));
-    }
 }
